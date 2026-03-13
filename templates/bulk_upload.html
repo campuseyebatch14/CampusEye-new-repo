@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block main %}
+<main class="form-page">
+    <div class="form-container glass-card">
+        <div class="form-header">
+            <h2><i class="fa-solid fa-file-import"></i> Bulk Student Upload</h2>
+            <p class="form-subtitle">Upload a CSV or Excel file with student details.</p>
+        </div>
+
+        <form action="/bulk-upload" method="POST" enctype="multipart/form-data" class="premium-form">
+            <div class="form-group">
+                <label><i class="fa-solid fa-file-csv"></i> Select File (.csv, .xlsx)</label>
+                <div class="file-upload-wrapper">
+                    <input type="file" name="file" accept=".csv, .xlsx, .xls" class="file-input" id="bulk-file" onchange="updateFileName(this)" required>
+                    <label for="bulk-file" class="file-label">
+                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                        <span id="file-name">Choose CSV/Excel...</span>
+                    </label>
+                </div>
+                <small class="hint-text">Format: name, studentId, branch, imageUrl</small>
+            </div>
+            <button type="submit" class="btn submit-btn">
+                <i class="fa-solid fa-upload"></i> Start Bulk Processing
+            </button>
+        </form>
+    </div>
+</main>
+
+<script>
+    function updateFileName(input) {
+        const fileNameSpan = document.getElementById('file-name');
+        if (input.files.length > 0) {
+            fileNameSpan.textContent = input.files[0].name;
+            fileNameSpan.parentElement.classList.add('file-selected');
+        }
+    }
+</script>
+{% endblock %}

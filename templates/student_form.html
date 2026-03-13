@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+
+{% set active_page = "student_form" %}
+
+{% block main %}
+<main class="form-page">
+    <div class="form-container glass-card">
+        <div class="form-header">
+            <h2>
+                {% if student %}
+                    <i class="fa-solid fa-user-pen"></i> Update Student
+                {% else %}
+                    <i class="fa-solid fa-user-plus"></i> Add Student
+                {% endif %}
+            </h2>
+            <p class="form-subtitle">
+                {% if student %}
+                    Modify the details for <strong>{{ student.name }}</strong>
+                {% else %}
+                    Enter the details below to enroll a new student.
+                {% endif %}
+            </p>
+        </div>
+
+        <form method="POST" enctype="multipart/form-data" class="premium-form">
+            
+            <div class="form-group">
+                <label for="name">
+                    <i class="fa-solid fa-signature"></i> Full Name
+                </label>
+                <input type="text" id="name" name="name" 
+                       value="{{ student.name if student else '' }}" 
+                       placeholder="e.g. Govind Bairi" required>
+            </div>
+
+            <div class="form-group">
+                <label for="student_id">
+                    <i class="fa-solid fa-id-card"></i> Student ID
+                </label>
+                <input type="text" id="student_id" name="student_id" 
+                       value="{{ student.studentId if student else '' }}" 
+                       placeholder="e.g. 21131A0501" 
+                       {% if student %}readonly style="opacity: 0.7; cursor: not-allowed;"{% endif %} 
+                       required>
+                {% if student %}
+                    <small class="hint-text">*Student ID cannot be changed</small>
+                {% endif %}
+            </div>
+
+            <div class="form-group">
+                <label for="branch">
+                    <i class="fa-solid fa-code-branch"></i> Branch
+                </label>
+                <div class="select-wrapper">
+                    <select name="branch" id="branch" required>
+                        <option value="" disabled {{ 'selected' if not student else '' }}>Select Branch</option>
+                        
+                        {% set branches = ['CSE', 'CSD', 'CSM', 'IT', 'ECE', 'EEE', 'Civil', 'Mech'] %}
+                        {% for b in branches %}
+                            <option value="{{ b }}" 
+                                {{ 'selected' if student and student.branch == b else '' }}>
+                                {{ b }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <i class="fa-solid fa-chevron-down select-arrow"></i>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="photo">
+                    <i class="fa-solid fa-camera"></i> Photograph
+                </label>
+                
+                <div class="file-upload-wrapper">
+                    <input type="file" id="photo" name="photo" accept="image/jpeg,image/jpg" 
+                           class="file-input" onchange="updateFileName(this)" {{ 'required' if not student else '' }}>
+                    
+                    <label for="photo" class="file-label">
+                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                        <span id="file-name">
+                            {% if student %}
+                                Update Photo (Optional)
+                            {% else %}
+                                Choose Image...
+                            {% endif %}
+                        </span>
+                    </label>
+                </div>
+                
+                {% if student %}
+                    <div class="current-photo-preview">
+                        <small>Current Photo:</small>
+                        <img src="{{ student.photoUrl }}" alt="Current Photo" class="mini-preview">
+                    </div>
+                {% endif %}
+            </div>
+
+            <button type="submit" class="btn submit-btn">
+                {% if student %}
+                    <i class="fa-solid fa-floppy-disk"></i> Save Changes
+                {% else %}
+                    <i class="fa-solid fa-paper-plane"></i> Submit Registration
+                {% endif %}
+            </button>
+        </form>
+    </div>
+</main>
+
+<script>
+    function updateFileName(input) {
+        const fileNameSpan = document.getElementById('file-name');
+        if (input.files && input.files.length > 0) {
+            fileNameSpan.textContent = input.files[0].name;
+            fileNameSpan.parentElement.classList.add('file-selected');
+        } else {
+            fileNameSpan.textContent = "Choose Image...";
+            fileNameSpan.parentElement.classList.remove('file-selected');
+        }
+    }
+</script>
+
+<style>
+    /* Centers the form vertically on the page */
+    .form-page {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 80vh;
+    }
+
+    .form-container {
+        width: 100%;
+        max-width: 500px;
+        background: var(--bg-card);
+        /* Note: border-radius & box-shadow are handled by 'glass-card' in styles.css */
+    }
+
+    .form-header {
+        padding: 2em;
+        background: rgba(0,0,0,0.2);
+        border-bottom: 1px solid var(--border-glass);
+        text-align: center;
+    }
+
+    .form-header h2 {
+        color: var(--text-main);
+        margin-bottom: 0.5em;
+        font-size: 1.8rem;
+    }
+
+    .form-subtitle {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+    }
+
+    .premium-form {
+        padding: 2em;
+        width: 100%;
+    }
+
+    .form-group {
+        margin-bottom: 1.5em;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 0.5em;
+        color: var(--accent-secondary);
+        font-weight: 500;
+        font-size: 0.95rem;
+    }
+
+    .form-group label i {
+        margin-right: 8px;
+    }
+
+    .hint-text {
+        display: block;
+        margin-top: 5px;
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        font-style: italic;
+    }
+
+    /* --- Custom File Input Styling --- */
+    .file-upload-wrapper {
+        position: relative;
+        width: 100%;
+    }
+
+    .file-input {
+        opacity: 0;
+        width: 0.1px;
+        height: 0.1px;
+        position: absolute;
+        z-index: -1;
+    }
+
+    .file-label {
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 2px dashed var(--text-muted);
+        border-radius: 8px;
+        color: var(--text-muted) !important;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin-bottom: 0 !important;
+    }
+
+    .file-label:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: var(--accent-primary);
+        color: var(--text-main) !important;
+    }
+
+    .file-label.file-selected {
+        border-style: solid;
+        border-color: var(--success);
+        color: var(--success) !important;
+        background: rgba(16, 185, 129, 0.1);
+    }
+
+    .mini-preview {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 2px solid var(--accent-primary);
+        vertical-align: middle;
+        margin-left: 10px;
+    }
+
+    .current-photo-preview {
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--text-muted);
+        font-size: 0.85rem;
+    }
+
+    /* --- Select Dropdown Styling --- */
+    .select-wrapper {
+        position: relative;
+    }
+    
+    .select-arrow {
+        position: absolute;
+        right: 15px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        pointer-events: none;
+    }
+
+    select {
+        appearance: none;
+        -webkit-appearance: none;
+        cursor: pointer;
+    }
+
+    /* --- Submit Button --- */
+    .submit-btn {
+        width: 100%;
+        justify-content: center;
+        margin-top: 1em;
+        font-size: 1.1rem;
+        padding: 1em;
+        background: linear-gradient(135deg, var(--accent-primary), var(--accent-hover));
+        color: white;
+        transition: 0.3s;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .submit-btn:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 20px rgba(139, 92, 246, 0.4);
+    }
+</style>
+{% endblock %}

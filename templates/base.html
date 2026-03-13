@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CampusEye | Surveillance</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800&family=Poppins:wght@300;400;500&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="{{url_for('static', filename='css/styles.css')}}" />
+  
+  <script src="https://kit.fontawesome.com/61ff2b6ee8.js" crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <div class="page-wrapper">
+    <header>
+      <div class="brand-logo">
+        <i class="fa-solid fa-eye-low-vision"></i>
+        <span>CampusEye</span>
+      </div>
+      
+      <nav>
+        <a class="nav-link {{'active' if active_page == 'index' else ''}}" href="/">
+          <i class="fa-solid fa-chart-line"></i> Dashboard
+        </a>
+        <a class="nav-link {{'active' if active_page == 'student_form' else ''}}" href="/add-student">
+          <i class="fa-solid fa-user-plus"></i> Add Student
+        </a>
+      </nav>
+    </header>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="flash-msg {{category}}">
+      {% set category_icon = 'fa-circle-check' if category == 'success' else 'fa-circle-xmark' %}
+      <i class="msg-icon fa-solid {{category_icon}}"></i>
+      <div>
+        <span class="msg-title">{{category}}</span>
+        <span class="msg-content">{{message}}</span>
+      </div>
+      <button onclick="removeFlashMessage()" class="msg-close-btn">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <div class="content-container">
+      {% block main %} {% endblock %}
+    </div>
+
+    <footer>
+      <div class="footer-content">
+        <p class="copyright">&copy; 2025 <strong>CampusEye</strong>. All Rights Reserved.</p>
+        <div class="divider"></div>
+        <p class="developers">Developed by <span class="dev-name">Reshmitha</span>, <span class="dev-name">Pavan</span>, <span class="dev-name">Yaswanth</span>, <span class="dev-name">Govind</span></p>
+      </div>
+    </footer>
+  </div>
+
+  <div class="chat-widget">
+    <button id="chat-toggle-btn" class="chat-toggle-btn">
+      <i class="fa-solid fa-robot"></i>
+    </button>
+    
+    <div class="chat-container hidden" id="chat-container">
+      <div class="chat-header">
+        <div class="chat-title">
+          <i class="fa-solid fa-robot"></i> CampusEye AI
+        </div>
+        <button id="chat-close-btn" class="chat-close-btn">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      
+      <div class="chat-messages" id="chat-messages">
+        <div class="message bot-message">
+          Hello! I can answer questions about the surveillance logs. Ask me things like:
+          <br>• "Who was detected today?"
+          <br>• "When was Govind seen?"
+          <br>• "List students from CSE branch"
+        </div>
+      </div>
+      
+      <div class="chat-input-area">
+        <input type="text" id="chat-input" placeholder="Ask a question..." autocomplete="off">
+        <button id="chat-send-btn">
+          <i class="fa-solid fa-paper-plane"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function removeFlashMessage() {
+      const msg = document.querySelector('.flash-msg');
+      if(msg) msg.remove();
+    }
+    // Auto-remove flash messages after 4 seconds
+    setTimeout(() => { removeFlashMessage() }, 4000);
+
+    // --- Chat Widget Logic ---
+    const chatToggle = document.getElementById('chat-toggle-btn');
+    const chatContainer = document.getElementById('chat-container');
+    const chatClose = document.getElementById('chat-close-btn');
+    const chatInput = document.getElementById('chat-input');
+    const chatSend = document.getElementById('chat-send-btn');
+    const chatMessages = document.getElementById('chat-messages');
+
+    function toggleChat() {
+      chatContainer.classList.toggle('hidden');
+    }
+
+    chatToggle.addEventListener('click', toggleChat);
+    chatClose.addEventListener('click', toggleChat);
+
+    function addMessage(text, sender) {
+      const msgDiv = document.createElement('div');
+      msgDiv.classList.add('message', sender + '-message');
+      msgDiv.innerHTML = text; // Allow HTML for line breaks
+      chatMessages.appendChild(msgDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const text = chatInput.value.trim();
+      if (!text) return;
+
+      addMessage(text, 'user');
+      chatInput.value = '';
+
+      // Show loading indicator
+      const loadingId = 'loading-' + Date.now();
+      const loadingDiv = document.createElement('div');
+      loadingDiv.classList.add('message', 'bot-message', 'loading');
+      loadingDiv.id = loadingId;
+      loadingDiv.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Analyzing data...';
+      chatMessages.appendChild(loadingDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+
+      try {
+        const response = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: text })
+        });
+        
+        const data = await response.json();
+        
+        // Remove loading
+        document.getElementById(loadingId).remove();
+        
+        if (data.success) {
+          addMessage(data.answer, 'bot');
+        } else {
+          addMessage("Sorry, I encountered an error processing your request.", 'bot');
+        }
+      } catch (error) {
+        document.getElementById(loadingId).remove();
+        addMessage("Network error. Please try again.", 'bot');
+      }
+    }
+
+    chatSend.addEventListener('click', sendMessage);
+    chatInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
+  </script>
+</body>
+</html>
