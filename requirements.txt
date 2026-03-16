@@ -1,35 +1,29 @@
 # Web Framework and Server
 Flask==3.0.0
 Werkzeug==3.0.1
-gunicorn
+gunicorn==21.2.0
 
 # Environment variables
 python-dotenv==1.0.1
 
-# Computer Vision (Headless for server stability)
+# Computer Vision (Headless version is required for cloud servers)
 opencv-python-headless==4.9.0.80
 numpy==1.26.4
 
-# Face Recognition / Deep Learning (CPU-only to save RAM)
+# Face Recognition / Deep Learning (Fixed versions for compatibility)
 deepface==0.0.93
 tensorflow-cpu==2.15.0
 keras==2.15.0
 mtcnn==0.1.1
 retina-face==0.0.14
 
-# Database
-pymongo==4.6.1
-
-# Cloudinary
+# Database and API
+pymongo[srv]==4.6.1
 cloudinary==1.39.0
-
-# HTTP Requests
 requests==2.31.0
 
-# Timezone handling
+# Timezone and Utilities
 pytz==2024.1
-
-# Utilities and Excel processing
 pillow==10.2.0
 tqdm==4.66.2
 scipy==1.11.4
