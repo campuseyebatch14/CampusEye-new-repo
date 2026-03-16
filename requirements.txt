@@ -1,17 +1,18 @@
-# Web Framework
+# Web Framework and Server
 Flask==3.0.0
 Werkzeug==3.0.1
+gunicorn
 
 # Environment variables
 python-dotenv==1.0.1
 
-# Computer Vision
-opencv-python==4.9.0.80
+# Computer Vision (Headless for server stability)
+opencv-python-headless==4.9.0.80
 numpy==1.26.4
 
-# Face Recognition / Deep Learning
+# Face Recognition / Deep Learning (CPU-only to save RAM)
 deepface==0.0.93
-tensorflow==2.15.0
+tensorflow-cpu==2.15.0
 keras==2.15.0
 mtcnn==0.1.1
 retina-face==0.0.14
@@ -28,14 +29,9 @@ requests==2.31.0
 # Timezone handling
 pytz==2024.1
 
-# Utilities
+# Utilities and Excel processing
 pillow==10.2.0
 tqdm==4.66.2
 scipy==1.11.4
 pandas==2.1.4
-<<<<<<< HEAD
-
-# Excel processing
 openpyxl==3.1.2
-=======
->>>>>>> 2f609f86f133de1b530877bf4c1edd9e34d6631b
