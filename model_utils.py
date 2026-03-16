@@ -1,28 +1,50 @@
+import os
+import sys
+
+# --- STEP 1: THE CRITICAL DEPLOYMENT HACK ---
+# This MUST happen before any DeepFace or TensorFlow imports.
+# It tricks DeepFace into finding the Keras modules it expects.
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
+
+try:
+    import tensorflow as tf
+    import keras
+    # Manually inject keras into the tensorflow namespace
+    sys.modules["tensorflow.keras"] = keras
+    sys.modules["tensorflow.keras.preprocessing"] = keras.preprocessing
+except ImportError:
+    print("TensorFlow or Keras not found, deployment might fail.")
+
+# --- STEP 2: STANDARD IMPORTS ---
 import cv2
+import numpy as np
 from deepface import DeepFace
 import mongo_utils
 
-MODEL = 'Facenet'
-DETECTOR = 'opencv'  # Changed to opencv for easier installation
+# Use Facenet; it is significantly lighter than VGG-Face for Render's 512MB RAM
+MODEL = 'Facenet' 
+DETECTOR = 'opencv' 
 
-def getRepresentations(img):  # img = numpy array (BGR) or base64 encoded 
+def getRepresentations(img):
+    """Generates face representations from a BGR numpy array."""
     try:
+        # enforce_detection=False prevents the code from crashing if no face is seen
         obj = DeepFace.represent(
             img_path=img,
             model_name=MODEL,
             detector_backend=DETECTOR,
+            enforce_detection=False 
         )
         return obj
     except Exception as e:
-        print(f'no face detected: {str(e)}')
+        print(f'No face detected or model error: {str(e)}')
         return None
 
 def getEmbedding(img):
+    """Extracts the first embedding found in the image."""
     try:
         obj = getRepresentations(img)
-        print("Representations:", obj)  # Debug
-        if obj is None:
-            print("No face detected in image")
+        if not obj or len(obj) == 0:
             return None
         return obj[0]['embedding']
     except Exception as e:
@@ -30,36 +52,33 @@ def getEmbedding(img):
         return None
 
 def drawRectangle(img, facial_area):
-    x = facial_area['x']
-    y = facial_area['y']
-    w = facial_area['w']
-    h = facial_area['h']
-    img = cv2.rectangle(img, (x, y), (x + w, y + h), (255, 255, 0), 2)
-    return img
+    """Draws a cyan bounding box around detected faces."""
+    x, y, w, h = facial_area['x'], facial_area['y'], facial_area['w'], facial_area['h']
+    return cv2.rectangle(img, (x, y), (x + w, y + h), (255, 255, 0), 2)
 
 def findSuspects(input_img):
+    """Matches detected faces against the MongoDB database."""
     try:
         input_representations = getRepresentations(input_img)
-        if input_representations is None:
-            return {'found_suspect_ids': [], 'suspects_img': input_img}
-        print('Detected', len(input_representations), 'face(s)')
         
-        found_suspect_ids = []             # stores ids of matched suspects
-        matched_rep_ids = []               # stores corresponding indexes of matched representations in input
-        rep_index = 0
-        for rep in input_representations:
-            res = mongo_utils.findMatch(rep['embedding'])
+        if not input_representations:
+            return {'found_suspect_ids': [], 'suspects_img': input_img}
             
-            if len(res) > 0:
-                matched_rep_ids.append(rep_index)
-                found_suspect_ids.append(res[0]['_id'])
-                
-            rep_index += 1
+        found_suspect_ids = []
+        matched_rep_ids = []
+        
+        for index, rep in enumerate(input_representations):
+            # Only process if an embedding was actually generated
+            if 'embedding' in rep:
+                res = mongo_utils.findMatch(rep['embedding'])
+                if res and len(res) > 0:
+                    matched_rep_ids.append(index)
+                    found_suspect_ids.append(res[0]['_id'])
     
-        # drawing a bounding box around found suspects
-        suspects_img = input_img
-        for id in matched_rep_ids:
-            facial_area = input_representations[id]['facial_area']
+        # Draw boxes only for matched suspects
+        suspects_img = input_img.copy()
+        for idx in matched_rep_ids:
+            facial_area = input_representations[idx]['facial_area']
             suspects_img = drawRectangle(suspects_img, facial_area)
               
         return {'found_suspect_ids': found_suspect_ids, 'suspects_img': suspects_img}
