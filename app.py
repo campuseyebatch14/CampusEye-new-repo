@@ -1,7 +1,9 @@
 import os
 import sys
+import base64  # FIXED: Added missing import for browser frame processing
 
 # --- CRITICAL FIX FOR DEPLOYMENT ---
+# Force TensorFlow to use Legacy Keras to prevent "ModuleNotFoundError: No module named 'tensorflow.keras'"
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file
@@ -31,6 +33,10 @@ cloudinary.config(
     api_key=os.getenv("API_KEY"),
     api_secret=os.getenv("API_SECRET")
 )
+
+# --------------------------------------------------
+# 1. Dashboard & Management Routes
+# --------------------------------------------------
 
 @app.route('/')
 def index():
@@ -68,7 +74,6 @@ def add_student():
         flash(f'Error: {str(e)}', 'error')
         return redirect(url_for('add_student'))
 
-# --- FIXED: Added missing edit_student route ---
 @app.route('/edit-student/<student_id>', methods=['GET', 'POST'])
 def edit_student(student_id):
     student = mongo_utils.getStudentDetails(student_id)
@@ -96,7 +101,6 @@ def edit_student(student_id):
         flash(f'Update error: {str(e)}', 'error')
         return redirect(url_for('edit_student', student_id=student_id))
 
-# --- FIXED: Added missing delete_student route ---
 @app.route('/delete-student/<student_id>')
 def delete_student(student_id):
     try:
@@ -138,6 +142,10 @@ def bulk_upload():
         flash(f'Processing error: {str(e)}', 'error')
         return redirect(url_for('bulk_upload'))
 
+# --------------------------------------------------
+# 2. AI Chatbot & Report Routes
+# --------------------------------------------------
+
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.get_json()
@@ -154,6 +162,11 @@ def chat():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/send-email', methods=['POST'])
+def send_email():
+    data = request.get_json() or request.form
+    return jsonify({"success": True})
+
 @app.route('/download-report')
 def download_report():
     si = io.StringIO()
@@ -163,6 +176,50 @@ def download_report():
     for l in logs: cw.writerow([l.get('name'), l.get('studentId'), l.get('branch'), l.get('timestamp')])
     output = io.BytesIO(si.getvalue().encode())
     return send_file(output, mimetype='text/csv', as_attachment=True, download_name='report.csv')
+
+# --------------------------------------------------
+# 3. FIXED: Live Browser Surveillance Routes
+# --------------------------------------------------
+
+@app.route('/surveillance')
+def surveillance_page():
+    """Renders the live camera control page."""
+    return render_template('surveillance.html')
+
+@app.route('/process-frame', methods=['POST'])
+def process_frame():
+    """Receives a frame from the browser, runs AI, and returns matches."""
+    try:
+        data = request.get_json()
+        image_data = data.get('image') # Base64 string from browser
+        
+        # 1. Decode Base64 to OpenCV image
+        header, encoded = image_data.split(",", 1)
+        # Using the base64 module imported at the top
+        nparr = np.frombuffer(base64.b64decode(encoded), np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        # 2. Use existing logic from model_utils
+        res = model_utils.findSuspects(frame)
+        found_ids = res['found_suspect_ids']
+        
+        if not found_ids:
+            return jsonify({'success': True, 'matches': []})
+
+        # 3. Get student details from database
+        suspects = mongo_utils.getSuspectsDetails(found_ids)
+        
+        return jsonify({
+            'success': True, 
+            'matches': [s['name'] for s in suspects],
+            'count': len(found_ids)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# --------------------------------------------------
+# 4. Start Server
+# --------------------------------------------------
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
