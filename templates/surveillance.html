@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="glass-card" style="max-width: 800px; margin: auto; text-align: center; padding: 2em;">
+    <h2><i class="fa-solid fa-video"></i> Live Surveillance</h2>
+    <p class="subtitle">Control the AI detection engine from here</p>
+
+    <div style="margin: 20px 0;">
+        <video id="video" width="640" height="480" autoplay style="border-radius: 12px; border: 2px solid var(--accent-primary);"></video>
+        <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+    </div>
+
+    <div class="action-buttons" style="justify-content: center;">
+        <button id="start-btn" class="btn" style="background: var(--success);"><i class="fa-solid fa-play"></i> Start Camera</button>
+        <button id="stop-btn" class="btn" style="background: var(--danger);" disabled><i class="fa-solid fa-stop"></i> Stop Camera</button>
+    </div>
+
+    <div id="status-box" style="margin-top: 20px; font-weight: 600; color: var(--accent-secondary);">
+        Status: Offline
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const startBtn = document.getElementById('start-btn');
+    const stopBtn = document.getElementById('stop-btn');
+    const statusBox = document.getElementById('status-box');
+    let stream = null;
+    let interval = null;
+
+    async function startCamera() {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        statusBox.innerText = "Status: Monitoring Active...";
+        
+        // Send a frame to the server every 3 seconds (To save Render RAM)
+        interval = setInterval(captureAndSend, 3000);
+    }
+
+    function stopCamera() {
+        stream.getTracks().forEach(track => track.stop());
+        video.srcObject = null;
+        clearInterval(interval);
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        statusBox.innerText = "Status: Offline";
+    }
+
+    async function captureAndSend() {
+        const context = canvas.getContext('2d');
+        context.drawImage(video, 0, 0, 640, 480);
+        const dataUrl = canvas.toDataURL('image/jpeg');
+
+        const response = await fetch('/process-frame', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: dataUrl })
+        });
+        const data = await response.json();
+        if(data.matches && data.matches.length > 0) {
+            statusBox.innerHTML = `<span style="color:var(--danger)">MATCH FOUND: ${data.matches.join(', ')}</span>`;
+        }
+    }
+
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+</script>
+{% endblock %}
