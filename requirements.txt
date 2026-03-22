@@ -13,6 +13,7 @@ tf-keras==2.15.0
 deepface==0.0.93
 retina-face==0.0.14
 mtcnn==0.1.1
+pandas==2.1.4
 
 # Database & Utils
 pymongo[srv]==4.6.1
