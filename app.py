@@ -1,10 +1,12 @@
 import os
 import sys
 import base64
+import io
+import csv
 from datetime import datetime
 
 # --- CRITICAL FIX FOR DEPLOYMENT ---
-# Force TensorFlow to use Legacy Keras to prevent "ModuleNotFoundError: No module named 'tensorflow.keras'"
+# Force TensorFlow to use Legacy Keras to prevent "ModuleNotFoundError"
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file
@@ -14,8 +16,6 @@ from dotenv import load_dotenv
 import cloudinary
 from cloudinary.uploader import upload
 import requests
-import csv
-import io
 import pandas as pd
 
 # Import your custom modules
@@ -35,8 +35,50 @@ cloudinary.config(
     api_secret=os.getenv("API_SECRET")
 )
 
-# Global State to prevent sending multiple emails for the same student in one session
+# Global State: Tracks notified students to prevent duplicate emails in a single session
 notified_students = set()
+
+# --------------------------------------------------
+# INTERNAL HELPER: Alert Logic
+# --------------------------------------------------
+
+def trigger_alert_notification(data):
+    """
+    Directly handles EmailJS alerts. 
+    Calling this as a function is more reliable than an internal HTTP request on Render.
+    """
+    recipients = [os.getenv("RECIPIENT_EMAIL"), os.getenv("ADMIN_EMAIL")]
+    # Filter out None values
+    recipients = [email for email in recipients if email]
+    
+    success_flag = False
+    for email_addr in recipients:
+        payload = {
+            "service_id": os.getenv("EMAILJS_SERVICE_ID"),
+            "template_id": os.getenv("EMAILJS_TEMPLATE_ID"),
+            "user_id": os.getenv("EMAILJS_USER_ID"),         
+            "accessToken": os.getenv("EMAILJS_PRIVATE_KEY"),  
+            "template_params": {
+                "to_name": data.get("name"),
+                "student_id": data.get("studentId"),
+                "branch": data.get("branch"),
+                "timestamp": data.get("timestamp"),
+                "photo_url": data.get("photoUrl"),
+                "to_email": email_addr
+            }
+        }
+        try:
+            response = requests.post(
+                "https://api.emailjs.com/api/v1.0/email/send",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=10 
+            )
+            if response.status_code == 200:
+                success_flag = True
+        except Exception as e:
+            print(f"Alert Error for {email_addr}: {e}")
+    return success_flag
 
 # --------------------------------------------------
 # 1. Dashboard & Management Routes
@@ -53,28 +95,30 @@ def index():
 @app.route('/add-student', methods=['GET', 'POST'])
 def add_student():
     if request.method == 'GET':
-        return render_template('student_form.html', student=None)
+        return render_template('student_form.html', student=None, active_page='student_form')
     
     try:
         name, s_id, branch = request.form['name'], request.form['student_id'], request.form['branch']
         photo = request.files['photo']
         
+        # Upload to Cloudinary
         upload_result = upload(photo)
         photo_url = upload_result['secure_url']
 
+        # AI Processing
         photo.seek(0)
         img = cv2.imdecode(np.frombuffer(photo.read(), np.uint8), cv2.IMREAD_COLOR)
         embedding = model_utils.getEmbedding(img)
 
         if embedding is None:
-            flash('Face not detected.', 'error')
+            flash('Face not detected. Please upload a clearer photo.', 'error')
             return redirect(url_for('add_student'))
 
         mongo_utils.students_collection.insert_one({
             'name': name, 'studentId': s_id, 'branch': branch,
-            'embedding': embedding, 'photoUrl': upload_result['secure_url']
+            'embedding': embedding, 'photoUrl': photo_url
         })
-        flash('Student added!', 'success')
+        flash('Student added successfully!', 'success')
         return redirect(url_for('index'))
     except Exception as e:
         flash(f'Error: {str(e)}', 'error')
@@ -101,7 +145,7 @@ def edit_student(student_id):
                 update_data['photoUrl'] = upload_result['secure_url']
 
         mongo_utils.students_collection.update_one({'studentId': student_id}, {'$set': update_data})
-        flash('Student updated successfully', 'success')
+        flash('Student details updated!', 'success')
         return redirect(url_for('index'))
     except Exception as e:
         flash(f'Update error: {str(e)}', 'error')
@@ -111,7 +155,7 @@ def edit_student(student_id):
 def delete_student(student_id):
     try:
         mongo_utils.deleteStudent(student_id)
-        flash('Student removed successfully', 'success')
+        flash('Student record deleted.', 'success')
     except Exception as e:
         flash(f'Delete error: {str(e)}', 'error')
     return redirect(url_for('index'))
@@ -125,16 +169,20 @@ def bulk_upload():
         flash('No file selected', 'error')
         return redirect(url_for('bulk_upload'))
     try:
+        # Handling both CSV and Excel
         df = pd.read_csv(file) if file.filename.endswith('.csv') else pd.read_excel(file)
         df.columns = [str(c).strip().lower().replace(" ", "").replace("full", "") for c in df.columns]
+        
         success_count = 0
         for _, row in df.iterrows():
             s_id = str(row['studentid']).strip()
             if mongo_utils.students_collection.find_one({'studentId': s_id}):
                 continue
+                
             img_response = requests.get(row['imageurl'], timeout=10)
             img = cv2.imdecode(np.asarray(bytearray(img_response.content), dtype="uint8"), cv2.IMREAD_COLOR)
             embedding = model_utils.getEmbedding(img)
+            
             if embedding is not None:
                 upload_result = upload(row['imageurl'])
                 mongo_utils.students_collection.insert_one({
@@ -142,14 +190,15 @@ def bulk_upload():
                     'embedding': embedding, 'photoUrl': upload_result['secure_url']
                 })
                 success_count += 1
-        flash(f'Successfully added {success_count} students.', 'success')
+                
+        flash(f'Successfully processed {success_count} students.', 'success')
         return redirect(url_for('index'))
     except Exception as e:
-        flash(f'Processing error: {str(e)}', 'error')
+        flash(f'Bulk processing error: {str(e)}', 'error')
         return redirect(url_for('bulk_upload'))
 
 # --------------------------------------------------
-# 2. AI Chatbot & Report Routes
+# 2. AI Chatbot & Reporting
 # --------------------------------------------------
 
 @app.route('/chat', methods=['POST'])
@@ -158,13 +207,15 @@ def chat():
     query = data.get('query', '').lower()
     try:
         logs = list(mongo_utils.detections_collection.find({}, {'_id': 0}))
-        if not logs: return jsonify({'success': True, 'answer': "No logs found."})
+        if not logs: return jsonify({'success': True, 'answer': "No surveillance logs found yet."})
+        
         all_names = list(set(d['name'] for d in logs))
         found_name = next((n for n in all_names if n.lower() in query), None)
+        
         if found_name:
             times = [d['timestamp'] for d in logs if d['name'] == found_name]
-            return jsonify({'success': True, 'answer': f"<b>{found_name}</b> seen {len(times)} times. Recent: {times[-1]}"})
-        return jsonify({'success': True, 'answer': "Ask about a specific student name."})
+            return jsonify({'success': True, 'answer': f"<b>{found_name}</b> detected {len(times)} times. Recent: {times[-1]}"})
+        return jsonify({'success': True, 'answer': "Ask me about specific student detections or branch logs."})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -176,85 +227,57 @@ def download_report():
     logs = mongo_utils.detections_collection.find()
     for l in logs: cw.writerow([l.get('name'), l.get('studentId'), l.get('branch'), l.get('timestamp')])
     output = io.BytesIO(si.getvalue().encode())
-    return send_file(output, mimetype='text/csv', as_attachment=True, download_name='report.csv')
+    return send_file(output, mimetype='text/csv', as_attachment=True, download_name='campus_surveillance_report.csv')
 
 # --------------------------------------------------
-# 3. Email & Surveillance Logic
+# 3. Cloud Surveillance Logic
 # --------------------------------------------------
 
 @app.route('/send-email', methods=['POST'])
 def send_email():
-    """Sends automated alerts to both the recipient and admin email addresses."""
+    """Manual endpoint for alert triggers."""
     data = request.get_json() or request.form
-    
-    recipients = [os.getenv("RECIPIENT_EMAIL"), os.getenv("ADMIN_EMAIL")]
-    recipients = [email for email in recipients if email]
-    
-    overall_success = False
-
-    for email_addr in recipients:
-        payload = {
-            "service_id": os.getenv("EMAILJS_SERVICE_ID"),
-            "template_id": os.getenv("EMAILJS_TEMPLATE_ID"),
-            "user_id": os.getenv("EMAILJS_USER_ID"),         
-            "accessToken": os.getenv("EMAILJS_PRIVATE_KEY"),  
-            "template_params": {
-                "to_name": data.get("name"),
-                "student_id": data.get("studentId"),
-                "branch": data.get("branch"),
-                "timestamp": data.get("timestamp"),
-                "photo_url": data.get("photoUrl"),
-                "to_email": email_addr
-            }
-        }
-
-        try:
-            response = requests.post(
-                "https://api.emailjs.com/api/v1.0/email/send",
-                headers={"Content-Type": "application/json"},
-                json=payload,
-                timeout=10 
-            )
-            if response.status_code == 200:
-                overall_success = True
-        except Exception as e:
-            print(f"Email error for {email_addr}: {e}")
-
-    return jsonify({"success": overall_success})
+    success = trigger_alert_notification(data)
+    return jsonify({"success": success})
 
 @app.route('/surveillance')
 def surveillance_page():
-    """Renders the live camera control page."""
-    return render_template('surveillance.html')
+    """Renders the unified camera control panel."""
+    return render_template('surveillance.html', active_page='surveillance')
 
 @app.route('/process-frame', methods=['POST'])
 def process_frame():
-    """Receives a frame, runs AI, logs to DB, and triggers email alerts."""
+    """Receives browser frames, runs identification, logs results, and alerts."""
     try:
         data = request.get_json()
         image_data = data.get('image')
         header, encoded = image_data.split(",", 1)
-        nparr = np.frombuffer(base64.decodebytes(encoded.encode()), np.uint8)
+        
+        # Decode frame from browser
+        nparr = np.frombuffer(base64.b64decode(encoded), np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
+        # AI Search
         res = model_utils.findSuspects(frame)
         found_ids = res['found_suspect_ids']
         
         if not found_ids:
-            return jsonify({'success': True, 'matches': []})
+            return jsonify({'success': True, 'detected': False, 'message': 'Monitoring... No match found'})
 
+        # Fetch matched details
         suspects_details = mongo_utils.getSuspectsDetails(found_ids)
         full_timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        matches = []
 
-        detection_records = []
         for suspect in suspects_details:
             s_id = suspect['studentId']
+            matches.append(suspect['name'])
             
-            # Trigger Email and DB Log only if not already notified in this session
+            # Log & Email if new to this session
             if s_id not in notified_students:
                 notified_students.add(s_id)
                 
-                email_payload = {
+                alert_payload = {
                     'name': suspect['name'],
                     'studentId': s_id,
                     'branch': suspect['branch'],
@@ -262,36 +285,24 @@ def process_frame():
                     'photoUrl': suspect['photoUrl']
                 }
                 
-                # Trigger the email internally
-                try:
-                    requests.post('http://localhost:5000/send-email', json=email_payload, timeout=5)
-                except:
-                    pass
-
-                # Prepare MongoDB log record
-                detection_records.append({
-                    'studentId': s_id,
-                    'name': suspect['name'],
-                    'branch': suspect['branch'],
-                    'timestamp': full_timestamp,
-                    'photoUrl': suspect['photoUrl']
-                })
-
-        # Store detection record in MongoDB
-        if detection_records:
-            mongo_utils.store_detection_records(detection_records)
+                # Direct logic call
+                trigger_alert_notification(alert_payload)
+                # MongoDB log
+                mongo_utils.store_detection_records([alert_payload])
 
         return jsonify({
             'success': True, 
-            'matches': [s['name'] for s in suspects_details],
-            'count': len(found_ids)
+            'detected': True,
+            'message': f"DETECTED: {', '.join(matches)}",
+            'matches': matches
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 # --------------------------------------------------
-# 4. Start Server
+# 4. Main Initialization
 # --------------------------------------------------
 
 if __name__ == '__main__':
+    # Using 0.0.0.0 for Render compatibility
     app.run(host='0.0.0.0', port=5000)
