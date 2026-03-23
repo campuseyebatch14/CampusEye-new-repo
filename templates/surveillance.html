@@ -1,21 +1,25 @@
 {% extends "base.html" %}
+
 {% block main %}
 <div class="glass-card" style="max-width: 800px; margin: auto; text-align: center; padding: 2em;">
-    <h2><i class="fa-solid fa-video"></i> Live Surveillance</h2>
-    <p class="subtitle">Control the AI detection engine from here</p>
+    <h2><i class="fa-solid fa-video"></i> CampusEye Surveillance</h2>
+    
+    <div id="notification-bar" style="margin: 15px 0; padding: 15px; border-radius: 8px; background: #334155; color: white; font-weight: 700; font-size: 1.1rem; transition: all 0.4s ease; border: 2px solid rgba(255,255,255,0.1);">
+        <i class="fa-solid fa-power-off"></i> SYSTEM OFFLINE
+    </div>
 
-    <div style="margin: 20px 0;">
-        <video id="video" width="640" height="480" autoplay style="border-radius: 12px; border: 2px solid var(--accent-primary);"></video>
+    <div style="position: relative; display: inline-block; width: 100%;">
+        <video id="video" width="100%" height="auto" autoplay style="border-radius: 12px; border: 4px solid #1e293b; background: #000;"></video>
         <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
     </div>
 
-    <div class="action-buttons" style="justify-content: center;">
-        <button id="start-btn" class="btn" style="background: var(--success);"><i class="fa-solid fa-play"></i> Start Camera</button>
-        <button id="stop-btn" class="btn" style="background: var(--danger);" disabled><i class="fa-solid fa-stop"></i> Stop Camera</button>
-    </div>
-
-    <div id="status-box" style="margin-top: 20px; font-weight: 600; color: var(--accent-secondary);">
-        Status: Offline
+    <div class="action-buttons" style="justify-content: center; margin-top: 25px; gap: 20px;">
+        <button id="start-btn" class="btn" style="background: #10b981; padding: 12px 30px;">
+            <i class="fa-solid fa-play"></i> START MONITORING
+        </button>
+        <button id="stop-btn" class="btn" style="background: #ef4444; padding: 12px 30px;" disabled>
+            <i class="fa-solid fa-stop"></i> STOP SYSTEM
+        </button>
     </div>
 </div>
 
@@ -24,43 +28,76 @@
     const canvas = document.getElementById('canvas');
     const startBtn = document.getElementById('start-btn');
     const stopBtn = document.getElementById('stop-btn');
-    const statusBox = document.getElementById('status-box');
+    const notifyBar = document.getElementById('notification-bar');
     let stream = null;
     let interval = null;
 
+    // Helper to update the Notification Bar UI
+    function updateNotify(text, bgColor, icon = "fa-circle-notch fa-spin") {
+        notifyBar.innerHTML = `<i class="fa-solid ${icon}"></i> ${text.toUpperCase()}`;
+        notifyBar.style.background = bgColor;
+        notifyBar.style.transform = "scale(1.02)";
+        setTimeout(() => notifyBar.style.transform = "scale(1)", 2000);
+    }
+
     async function startCamera() {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-        statusBox.innerText = "Status: Monitoring Active...";
-        
-        // Send a frame to the server every 3 seconds (To save Render RAM)
-        interval = setInterval(captureAndSend, 3000);
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            
+            updateNotify("MONITORING ACTIVE...", "#0ea5e9", "fa-eye");
+            
+            // Send frame every 3.5 seconds (Balance between speed and Render RAM)
+            interval = setInterval(captureAndSend, 3500);
+        } catch (err) {
+            updateNotify("ERROR: CAMERA ACCESS DENIED", "#ef4444", "fa-triangle-exclamation");
+        }
     }
 
     function stopCamera() {
-        stream.getTracks().forEach(track => track.stop());
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+        }
         video.srcObject = null;
         clearInterval(interval);
         startBtn.disabled = false;
         stopBtn.disabled = true;
-        statusBox.innerText = "Status: Offline";
+        updateNotify("SYSTEM OFFLINE", "#334155", "fa-power-off");
     }
 
     async function captureAndSend() {
         const context = canvas.getContext('2d');
         context.drawImage(video, 0, 0, 640, 480);
-        const dataUrl = canvas.toDataURL('image/jpeg');
+        
+        // Compress image to 60% quality to save your Render bandwidth
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
 
-        const response = await fetch('/process-frame', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: dataUrl })
-        });
-        const data = await response.json();
-        if(data.matches && data.matches.length > 0) {
-            statusBox.innerHTML = `<span style="color:var(--danger)">MATCH FOUND: ${data.matches.join(', ')}</span>`;
+        try {
+            const response = await fetch('/process-frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: dataUrl })
+            });
+            const data = await response.json();
+            
+            if (data.detected && data.matches.length > 0) {
+                // RED BAR: If someone is found
+                updateNotify(`MATCH FOUND: ${data.matches.join(', ')}`, "#dc2626", "fa-user-check");
+                // Reset to blue after 2 seconds
+                setTimeout(() => {
+                    if (interval) updateNotify("MONITORING ACTIVE...", "#0ea5e9", "fa-eye");
+                }, 2500);
+            } else if (data.message.includes("No registered face")) {
+                // GREY BAR: If face is seen but not registered
+                updateNotify("FACE DETECTED: NOT REGISTERED", "#64748b", "fa-user-slash");
+            } else {
+                // NORMAL BLUE: If no face is seen
+                updateNotify("SCANNING... NO FACE IN VIEW", "#0ea5e9", "fa-magnifying-glass");
+            }
+        } catch (e) {
+            console.error("Frame processing error");
         }
     }
 
