@@ -1,21 +1,11 @@
-# Server
 Flask==3.0.0
 gunicorn==21.2.0
 python-dotenv==1.0.1
-
-# AI & Computer Vision
 opencv-python-headless==4.9.0.80
 numpy==1.26.4
-# Force specific versions to ensure legacy compatibility
 tensorflow-cpu==2.15.0
-keras==2.15.0
 tf-keras==2.15.0
 deepface==0.0.93
-retina-face==0.0.14
-mtcnn==0.1.1
-pandas==2.1.4
-
-# Database & Utils
 pymongo[srv]==4.6.1
 cloudinary==1.39.0
 requests==2.31.0
