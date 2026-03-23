@@ -1,6 +1,7 @@
 import os
 import sys
-import base64  # FIXED: Added missing import for browser frame processing
+import base64
+from datetime import datetime
 
 # --- CRITICAL FIX FOR DEPLOYMENT ---
 # Force TensorFlow to use Legacy Keras to prevent "ModuleNotFoundError: No module named 'tensorflow.keras'"
@@ -34,6 +35,9 @@ cloudinary.config(
     api_secret=os.getenv("API_SECRET")
 )
 
+# Global State to prevent sending multiple emails for the same student in one session
+notified_students = set()
+
 # --------------------------------------------------
 # 1. Dashboard & Management Routes
 # --------------------------------------------------
@@ -56,6 +60,8 @@ def add_student():
         photo = request.files['photo']
         
         upload_result = upload(photo)
+        photo_url = upload_result['secure_url']
+
         photo.seek(0)
         img = cv2.imdecode(np.frombuffer(photo.read(), np.uint8), cv2.IMREAD_COLOR)
         embedding = model_utils.getEmbedding(img)
@@ -162,11 +168,6 @@ def chat():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-@app.route('/send-email', methods=['POST'])
-def send_email():
-    data = request.get_json() or request.form
-    return jsonify({"success": True})
-
 @app.route('/download-report')
 def download_report():
     si = io.StringIO()
@@ -178,8 +179,48 @@ def download_report():
     return send_file(output, mimetype='text/csv', as_attachment=True, download_name='report.csv')
 
 # --------------------------------------------------
-# 3. FIXED: Live Browser Surveillance Routes
+# 3. Email & Surveillance Logic
 # --------------------------------------------------
+
+@app.route('/send-email', methods=['POST'])
+def send_email():
+    """Sends automated alerts to both the recipient and admin email addresses."""
+    data = request.get_json() or request.form
+    
+    recipients = [os.getenv("RECIPIENT_EMAIL"), os.getenv("ADMIN_EMAIL")]
+    recipients = [email for email in recipients if email]
+    
+    overall_success = False
+
+    for email_addr in recipients:
+        payload = {
+            "service_id": os.getenv("EMAILJS_SERVICE_ID"),
+            "template_id": os.getenv("EMAILJS_TEMPLATE_ID"),
+            "user_id": os.getenv("EMAILJS_USER_ID"),         
+            "accessToken": os.getenv("EMAILJS_PRIVATE_KEY"),  
+            "template_params": {
+                "to_name": data.get("name"),
+                "student_id": data.get("studentId"),
+                "branch": data.get("branch"),
+                "timestamp": data.get("timestamp"),
+                "photo_url": data.get("photoUrl"),
+                "to_email": email_addr
+            }
+        }
+
+        try:
+            response = requests.post(
+                "https://api.emailjs.com/api/v1.0/email/send",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=10 
+            )
+            if response.status_code == 200:
+                overall_success = True
+        except Exception as e:
+            print(f"Email error for {email_addr}: {e}")
+
+    return jsonify({"success": overall_success})
 
 @app.route('/surveillance')
 def surveillance_page():
@@ -188,30 +229,61 @@ def surveillance_page():
 
 @app.route('/process-frame', methods=['POST'])
 def process_frame():
-    """Receives a frame from the browser, runs AI, and returns matches."""
+    """Receives a frame, runs AI, logs to DB, and triggers email alerts."""
     try:
         data = request.get_json()
-        image_data = data.get('image') # Base64 string from browser
-        
-        # 1. Decode Base64 to OpenCV image
+        image_data = data.get('image')
         header, encoded = image_data.split(",", 1)
-        # Using the base64 module imported at the top
-        nparr = np.frombuffer(base64.b64decode(encoded), np.uint8)
+        nparr = np.frombuffer(base64.decodebytes(encoded.encode()), np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        # 2. Use existing logic from model_utils
         res = model_utils.findSuspects(frame)
         found_ids = res['found_suspect_ids']
         
         if not found_ids:
             return jsonify({'success': True, 'matches': []})
 
-        # 3. Get student details from database
-        suspects = mongo_utils.getSuspectsDetails(found_ids)
-        
+        suspects_details = mongo_utils.getSuspectsDetails(found_ids)
+        full_timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+        detection_records = []
+        for suspect in suspects_details:
+            s_id = suspect['studentId']
+            
+            # Trigger Email and DB Log only if not already notified in this session
+            if s_id not in notified_students:
+                notified_students.add(s_id)
+                
+                email_payload = {
+                    'name': suspect['name'],
+                    'studentId': s_id,
+                    'branch': suspect['branch'],
+                    'timestamp': full_timestamp,
+                    'photoUrl': suspect['photoUrl']
+                }
+                
+                # Trigger the email internally
+                try:
+                    requests.post('http://localhost:5000/send-email', json=email_payload, timeout=5)
+                except:
+                    pass
+
+                # Prepare MongoDB log record
+                detection_records.append({
+                    'studentId': s_id,
+                    'name': suspect['name'],
+                    'branch': suspect['branch'],
+                    'timestamp': full_timestamp,
+                    'photoUrl': suspect['photoUrl']
+                })
+
+        # Store detection record in MongoDB
+        if detection_records:
+            mongo_utils.store_detection_records(detection_records)
+
         return jsonify({
             'success': True, 
-            'matches': [s['name'] for s in suspects],
+            'matches': [s['name'] for s in suspects_details],
             'count': len(found_ids)
         })
     except Exception as e:
