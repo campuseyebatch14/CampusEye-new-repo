@@ -12,7 +12,7 @@ db = client['student_surveillance']
 students_collection = db['students']
 detections_collection = db['detections']
 
-DISTANCE_THRESHOLD = 10
+DISTANCE_THRESHOLD = 14
 
 def deleteStudent(student_id):
     students_collection.delete_one({'studentId': student_id})
