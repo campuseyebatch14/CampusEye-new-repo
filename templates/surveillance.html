@@ -1,55 +1,115 @@
 {% extends "base.html" %}
 {% block main %}
-<div class="glass-card" style="max-width: 800px; margin: auto; text-align: center; padding: 2em;">
-    <div id="status-bar" style="margin-bottom: 20px; padding: 15px; border-radius: 8px; background: #334155; color: white; font-weight: 700; transition: 0.4s;">
-        SYSTEM READY
+<div class="glass-card" style="max-width: 900px; margin: auto; text-align: center; padding: 2em;">
+    <h2><i class="fa-solid fa-video"></i> CampusEye Live Surveillance</h2>
+    
+    <div id="status-bar" style="margin: 15px 0; padding: 15px; border-radius: 8px; background: #334155; color: white; font-weight: 700; font-size: 1.1rem; transition: all 0.4s ease; border: 2px solid rgba(255,255,255,0.1);">
+        <i class="fa-solid fa-power-off"></i> SYSTEM OFFLINE
     </div>
 
-    <video id="video" width="100%" autoplay style="border-radius: 12px; background: #000;"></video>
-    <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+    <div style="position: relative; display: inline-block; width: 100%;">
+        <video id="video" width="100%" height="auto" autoplay style="border-radius: 12px; border: 4px solid #1e293b; background: #000;"></video>
+        <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+    </div>
 
-    <div style="margin-top: 25px;">
-        <button id="start-btn" class="btn" style="background: #10b981;">START CAMERA</button>
-        <button id="stop-btn" class="btn" style="background: #ef4444;" disabled>STOP CAMERA</button>
+    <div class="action-buttons" style="justify-content: center; margin-top: 25px; gap: 20px;">
+        <button id="start-btn" class="btn" style="background: #10b981; padding: 12px 30px;">
+            <i class="fa-solid fa-play"></i> START MONITORING
+        </button>
+        <button id="stop-btn" class="btn" style="background: #ef4444; padding: 12px 30px;" disabled>
+            <i class="fa-solid fa-stop"></i> STOP SYSTEM
+        </button>
+    </div>
+
+    <hr style="margin: 30px 0; border: 1px solid rgba(255,255,255,0.1);">
+
+    <div style="text-align: left;">
+        <h3><i class="fa-solid fa-clock-rotate-left"></i> Session History</h3>
+        <table class="students-table" style="margin-top: 10px;">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Time</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="log-body">
+                </tbody>
+        </table>
     </div>
 </div>
 
 <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
+    const startBtn = document.getElementById('start-btn');
+    const stopBtn = document.getElementById('stop-btn');
     const statusBar = document.getElementById('status-bar');
+    const logBody = document.getElementById('log-body');
+    let stream = null;
     let interval = null;
 
-    async function start() {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
-        document.getElementById('start-btn').disabled = true;
-        document.getElementById('stop-btn').disabled = false;
-        statusBar.innerText = "MONITORING ACTIVE...";
-        statusBar.style.background = "#0ea5e9";
-        interval = setInterval(sendFrame, 4000);
+    function updateUI(text, bgColor, icon = "fa-circle-notch fa-spin") {
+        statusBar.innerHTML = `<i class="fa-solid ${icon}"></i> ${text.toUpperCase()}`;
+        statusBar.style.background = bgColor;
     }
 
-    async function sendFrame() {
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, 640, 480);
-        const img = canvas.toDataURL('image/jpeg', 0.5);
-
-        const res = await fetch('/process-frame', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ image: img })
-        });
-        const data = await res.json();
-        
-        if (data.detected) {
-            statusBar.innerText = data.message;
-            statusBar.style.background = "#10b981";
-            setTimeout(() => { statusBar.style.background = "#0ea5e9"; }, 2000);
+    async function startCamera() {
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            updateUI("Monitoring Active...", "#0ea5e9", "fa-eye");
+            
+            // Send frame every 4 seconds (Best for Render Free Tier RAM)
+            interval = setInterval(captureAndSend, 4000);
+        } catch (err) {
+            updateUI("Error: Camera access denied", "#ef4444", "fa-triangle-exclamation");
         }
     }
 
-    document.getElementById('start-btn').onclick = start;
-    document.getElementById('stop-btn').onclick = () => location.reload();
+    function addLogEntry(name, time) {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td><strong>${name}</strong></td>
+            <td>${time}</td>
+            <td><span class="badge success">Alert Sent</span></td>
+        `;
+        logBody.prepend(row);
+    }
+
+    async function captureAndSend() {
+        const context = canvas.getContext('2d');
+        context.drawImage(video, 0, 0, 640, 480);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.5); // 50% quality to save bandwidth
+
+        try {
+            const response = await fetch('/process-frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: dataUrl })
+            });
+            const data = await response.json();
+            
+            if (data.detected) {
+                updateUI(data.message, "#dc2626", "fa-user-check");
+                const now = new Date().toLocaleTimeString();
+                data.matches.forEach(name => addLogEntry(name, now));
+                
+                // Return to normal blue after 2 seconds
+                setTimeout(() => {
+                    if (interval) updateUI("Monitoring Active...", "#0ea5e9", "fa-eye");
+                }, 2500);
+            } else if (data.message === "Scanning...") {
+                updateUI("No face in view", "#334155", "fa-magnifying-glass");
+            }
+        } catch (e) {
+            console.error("Frame processing failed");
+        }
+    }
+
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', () => { location.reload(); });
 </script>
 {% endblock %}
