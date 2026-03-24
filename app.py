@@ -6,8 +6,7 @@ import csv
 import gc
 from datetime import datetime
 
-# --- CRITICAL: EMERGENCY RAM SAVERS (Keep at the very top) ---
-# Force TensorFlow to use legacy mode and stop heavy logging to save memory
+# --- EMERGENCY RAM SAVERS (MUST BE AT TOP) ---
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -38,11 +37,11 @@ cloudinary.config(
     api_secret=os.getenv("API_SECRET")
 )
 
-# Global State: Tracks notified students for the current session to prevent email spam
+# Global State: Tracks notified students for the current session
 notified_students = set()
 
 # --------------------------------------------------
-# INTERNAL ALERT LOGIC (Prevents 502/Timeout Errors)
+# ALERT LOGIC (Prevents 502 Deadlocks)
 # --------------------------------------------------
 
 def trigger_alert_internal(data):
@@ -70,18 +69,16 @@ def trigger_alert_internal(data):
             res = requests.post("https://api.emailjs.com/api/v1.0/email/send", 
                                 json=payload, timeout=8)
             if res.status_code == 200: success = True
-        except Exception as e:
-            print(f"Alert failed for {email_addr}: {e}")
+        except: pass
     return success
 
 # --------------------------------------------------
-# 1. DASHBOARD & STUDENT MANAGEMENT
+# DASHBOARD & MANAGEMENT
 # --------------------------------------------------
 
 @app.route('/')
 def index():
     try:
-        # Fetch students but exclude embeddings to save memory
         students = list(mongo_utils.students_collection.find({}, {'_id': 0, 'embedding': 0}))
         return render_template('index.html', students_list=students, active_page='index')
     except Exception as e:
@@ -91,28 +88,20 @@ def index():
 def add_student():
     if request.method == 'GET':
         return render_template('student_form.html', student=None, active_page='student_form')
-    
     try:
         name, s_id, branch = request.form['name'], request.form['student_id'], request.form['branch']
         f = request.files['photo']
-        
-        # Upload to Cloudinary
         up = upload(f)
-        
-        # Reset file pointer and read for AI processing
         f.seek(0)
         img = cv2.imdecode(np.frombuffer(f.read(), np.uint8), cv2.IMREAD_COLOR)
         emb = model_utils.getEmbedding(img)
-
         if emb is None:
-            flash('Face not detected. Please try a clearer photo.', 'error')
+            flash('Face not detected.', 'error')
             return redirect(url_for('add_student'))
-
         mongo_utils.students_collection.insert_one({
             'name': name, 'studentId': s_id, 'branch': branch, 
             'embedding': emb, 'photoUrl': up['secure_url']
         })
-        
         flash('Student added successfully!', 'success')
         return redirect(url_for('index'))
     except Exception as e:
@@ -125,11 +114,9 @@ def edit_student(student_id):
     if request.method == 'GET':
         return render_template('student_form.html', student=student)
     try:
-        mongo_utils.students_collection.update_one(
-            {'studentId': student_id}, 
-            {'$set': {'name': request.form['name'], 'branch': request.form['branch']}}
-        )
-        flash('Record updated!', 'success')
+        name, branch = request.form['name'], request.form['branch']
+        mongo_utils.students_collection.update_one({'studentId': student_id}, {'$set': {'name': name, 'branch': branch}})
+        flash('Student updated!', 'success')
         return redirect(url_for('index'))
     except:
         return redirect(url_for('index'))
@@ -137,7 +124,7 @@ def edit_student(student_id):
 @app.route('/delete-student/<student_id>')
 def delete_student(student_id):
     mongo_utils.deleteStudent(student_id)
-    flash('Student record deleted.', 'success')
+    flash('Record deleted.', 'success')
     return redirect(url_for('index'))
 
 @app.route('/bulk-upload', methods=['GET', 'POST'])
@@ -145,23 +132,19 @@ def bulk_upload():
     if request.method == 'GET': return render_template('bulk_upload.html')
     file = request.files.get('file')
     if not file: return redirect(url_for('bulk_upload'))
-    
     try:
-        # Using CSV module instead of Pandas to save ~50MB RAM
+        # Lightweight CSV processing
         stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
         reader = csv.DictReader(stream)
         count = 0
         for row in reader:
             data = {k.lower().replace(" ", ""): v for k, v in row.items()}
             s_id = data.get('studentid')
+            if not s_id or mongo_utils.students_collection.find_one({'studentId': s_id}): continue
             
-            if not s_id or mongo_utils.students_collection.find_one({'studentId': s_id}):
-                continue
-                
             img_res = requests.get(data.get('imageurl'), timeout=10)
             img = cv2.imdecode(np.asarray(bytearray(img_res.content), dtype="uint8"), cv2.IMREAD_COLOR)
             emb = model_utils.getEmbedding(img)
-            
             if emb is not None:
                 up = upload(data.get('imageurl'))
                 mongo_utils.students_collection.insert_one({
@@ -169,17 +152,16 @@ def bulk_upload():
                     'embedding': emb, 'photoUrl': up['secure_url']
                 })
                 count += 1
-        
-        gc.collect() # Immediate cleanup
-        flash(f'Bulk upload complete: {count} students added.', 'success')
+        gc.collect()
+        flash(f'Added {count} students.', 'success')
         return redirect(url_for('index'))
     except Exception as e:
         gc.collect()
-        flash(f'Bulk error: {str(e)}', 'error')
+        flash(f'Error: {str(e)}', 'error')
         return redirect(url_for('bulk_upload'))
 
 # --------------------------------------------------
-# 2. SURVEILLANCE & AI (BROWSER-BASED)
+# SURVEILLANCE & AI
 # --------------------------------------------------
 
 @app.route('/surveillance')
@@ -188,63 +170,46 @@ def surveillance_page():
 
 @app.route('/process-frame', methods=['POST'])
 def process_frame():
-    """Receives browser frames, runs AI identification, logs to DB, and sends alerts."""
     try:
         data = request.get_json()
-        raw = data.get('image').split(",", 1)[1]
-        nparr = np.frombuffer(base64.b64decode(raw), np.uint8)
+        image_data = data.get('image').split(",", 1)[1]
+        nparr = np.frombuffer(base64.b64decode(image_data), np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        # AI Identification
         res = model_utils.findSuspects(frame)
         found_ids = res.get('found_suspect_ids', [])
         
         if not found_ids:
             del frame, nparr
             gc.collect()
-            return jsonify({'success': True, 'detected': False, 'message': 'Scanning... No match'})
+            return jsonify({'success': True, 'detected': False, 'message': 'Scanning...'})
 
         suspects = mongo_utils.getSuspectsDetails(found_ids)
-        ts = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         matches = []
 
         for s in suspects:
             s_id = s['studentId']
             matches.append(s['name'])
-            
             if s_id not in notified_students:
                 notified_students.add(s_id)
-                alert_info = {
-                    'name': s['name'], 'studentId': s_id, 
-                    'branch': s['branch'], 'timestamp': ts, 
-                    'photoUrl': s['photoUrl']
-                }
-                # Direct trigger
+                alert_info = {'name': s['name'], 'studentId': s_id, 'branch': s['branch'], 'timestamp': timestamp, 'photoUrl': s['photoUrl']}
                 trigger_alert_internal(alert_info)
-                # Save log
                 mongo_utils.store_detection_records([alert_info])
 
-        # Mandatory memory cleanup
         del frame, nparr
         gc.collect()
-        
-        return jsonify({
-            'success': True, 
-            'detected': True, 
-            'message': f"DETECTED: {', '.join(matches)}", 
-            'matches': matches
-        })
+        return jsonify({'success': True, 'detected': True, 'message': f"DETECTED: {', '.join(matches)}", 'matches': matches})
     except Exception as e:
         gc.collect()
         return jsonify({'success': False, 'error': str(e)})
 
 # --------------------------------------------------
-# 3. REPORTS & CHATBOT
+# REPORTS & CHATBOT
 # --------------------------------------------------
 
 @app.route('/download-report')
 def download_report():
-    """Generates the attendance CSV required by the dashboard link."""
     si = io.StringIO()
     cw = csv.writer(si)
     cw.writerow(['Name', 'ID', 'Branch', 'Timestamp'])
@@ -262,20 +227,11 @@ def chat():
         logs = list(mongo_utils.detections_collection.find({}, {'_id': 0}))
         names = list(set(d['name'] for d in logs))
         found = next((n for n in names if n.lower() in query), None)
-        
         if found:
-            answer = f"<b>{found}</b> was recently detected by the system."
-        else:
-            answer = "I don't see that specific name in the recent detection logs."
-            
-        return jsonify({'success': True, 'answer': answer})
-    except:
-        return jsonify({'success': False, 'error': "Chatbot currently unavailable."})
-
-# --------------------------------------------------
-# 4. START SERVER
-# --------------------------------------------------
+            return jsonify({'success': True, 'answer': f"<b>{found}</b> was recently detected by the system."})
+        return jsonify({'success': True, 'answer': "I can't find that specific record in the logs."})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
-    # Use 0.0.0.0 for Render compatibility
     app.run(host='0.0.0.0', port=5000)
