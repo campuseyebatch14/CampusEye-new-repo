@@ -1,7 +1,5 @@
 {% extends "base.html" %}
-
 {% set active_page = "index" %}
-
 {% block main %}
 <main class="dashboard">
     <div class="hero-section">
@@ -16,7 +14,6 @@
                 <a href="{{ url_for('bulk_upload') }}" class="btn download-btn" style="background: var(--accent-secondary);">
                     <i class="fa-solid fa-file-import"></i> Bulk Upload
                 </a>
-                
                 <a href="{{ url_for('download_report') }}" class="btn download-btn">
                     <i class="fa-solid fa-cloud-arrow-down"></i> Download Report
                 </a>
@@ -27,32 +24,20 @@
             <table>
                 <thead>
                     <tr>
-                        <th>Profile</th>
-                        <th>Name</th>
-                        <th>Student ID</th>
-                        <th>Branch</th>
-                        <th>Actions</th>
+                        <th>Profile</th><th>Name</th><th>ID</th><th>Branch</th><th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for student in students_list %}
                     <tr class="student-row">
-                        <td>
-                            <div class="img-wrapper">
-                                <img src="{{student['photoUrl']}}" alt="{{student['name']}}">
-                            </div>
-                        </td>
+                        <td><div class="img-wrapper"><img src="{{student['photoUrl']}}" alt="{{student['name']}}"></div></td>
                         <td class="name-cell">{{student['name']}}</td>
                         <td class="id-cell">{{student['studentId']}}</td>
                         <td><span class="branch-badge">{{student['branch']}}</span></td>
                         <td>
                             <div class="action-buttons">
-                                <a class="icon-btn edit" title="Edit" href="{{ url_for('edit_student', student_id = student.studentId) }}">
-                                    <i class="fa-solid fa-pen-to-square"></i>
-                                </a>
-                                <a class="icon-btn delete" title="Delete" href="{{url_for('delete_student', student_id = student.studentId)}}">
-                                    <i class="fa-solid fa-trash"></i>
-                                </a>
+                                <a class="icon-btn edit" href="{{ url_for('edit_student', student_id = student.studentId) }}"><i class="fa-solid fa-pen"></i></a>
+                                <a class="icon-btn delete" href="{{url_for('delete_student', student_id = student.studentId)}}"><i class="fa-solid fa-trash"></i></a>
                             </div>
                         </td>
                     </tr>
