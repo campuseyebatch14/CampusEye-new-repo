@@ -1,92 +1,44 @@
+import os
 from pymongo import MongoClient
 from dotenv import load_dotenv
-import os
 
 load_dotenv()
+
+# --- CONNECTION LOGIC ---
+# Standardizes on 'MONGODB_URI' for Render environment variables
 uri = os.getenv('MONGODB_URI')
-print("URI:", uri)  # Debug
+
 if not uri or not uri.startswith(('mongodb://', 'mongodb+srv://')):
-    raise ValueError("MONGODB_URI is invalid or not set. Check .env file.")
-client = MongoClient(uri)
+    raise ValueError("MONGODB_URI is invalid or not set in Render Environment Settings.")
+
+# Added serverSelectionTimeoutMS to prevent long-running 'DB Error' hangs
+client = MongoClient(uri, serverSelectionTimeoutMS=5000)
 db = client['student_surveillance']
 students_collection = db['students']
 detections_collection = db['detections']
 
+# This threshold is used if you choose to use the MongoDB aggregation method
 DISTANCE_THRESHOLD = 14
 
 def deleteStudent(student_id):
+    """Removes a student record by their unique ID."""
     students_collection.delete_one({'studentId': student_id})
 
 def getStudentDetails(student_id):
-    query = students_collection.find_one(
+    """Fetches public details for a single student."""
+    return students_collection.find_one(
         {'studentId': student_id},
-        {
-            'name': 1,
-            'studentId': 1,
-            'branch': 1,
-            'photoUrl': 1,
-            '_id': 0
-        }
+        {'name': 1, 'studentId': 1, 'branch': 1, 'photoUrl': 1, '_id': 0}
     )
-    return query
 
 def getSuspectsDetails(suspect_ids):
-    query = students_collection.find(
+    """Fetches details for multiple students at once to minimize DB calls."""
+    return list(students_collection.find(
         {'studentId': {"$in": suspect_ids}},
-        {
-            'name': 1,
-            'studentId': 1,
-            'branch': 1,
-            'photoUrl': 1,
-            '_id': 0
-        }
-    )
-    return list(query)
-
-def findMatch(target_embedding):
-    query = students_collection.aggregate([
-        {
-            "$addFields": {
-                "target_embedding": target_embedding
-            }
-        }, {"$unwind": {"path": "$embedding", "includeArrayIndex": "embedding_index"}},
-        {"$unwind": {"path": "$target_embedding", "includeArrayIndex": "target_index"}},
-        {
-            "$project": {
-                "studentId": 1,
-                "embedding": 1,
-                "target_embedding": 1,
-                "compare": {
-                    "$cmp": ['$embedding_index', '$target_index']
-                }
-            }
-        }, {"$match": {"compare": 0}},
-        {
-            "$group": {
-                "_id": "$studentId",
-                "distance": {
-                    "$sum": {
-                        "$pow": [{
-                            "$subtract": ['$embedding', '$target_embedding']
-                        }, 2]
-                    }
-                }
-            }
-        },
-        {
-            "$project": {
-                "_id": 1,
-                "distance": {"$sqrt": "$distance"}
-            }
-        },
-        {
-            "$project": {
-                "_id": 1, "distance": 1, "cond": {"$lte": ["$distance", DISTANCE_THRESHOLD]}
-            }
-        }, {"$match": {"cond": True}}, {"$sort": {"distance": 1}}, {"$limit": DISTANCE_THRESHOLD}
-    ])
-
-    return list(query)
+        {'name': 1, 'studentId': 1, 'branch': 1, 'photoUrl': 1, '_id': 0}
+    ))
 
 def store_detection_records(records):
-    detections_collection.insert_many(records)
+    """Logs identified students into the detections collection."""
+    if records:
+        detections_collection.insert_many(records)
