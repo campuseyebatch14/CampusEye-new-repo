@@ -1,24 +1,35 @@
 import os
+import gc
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # --- CONNECTION LOGIC ---
-# Standardizes on 'MONGODB_URI' for Render environment variables
-uri = os.getenv('MONGODB_URI')
+# We check BOTH 'MONGODB_URI' and 'MONGO_URI' to be safe
+uri = os.getenv('MONGODB_URI') or os.getenv('MONGO_URI')
 
-if not uri or not uri.startswith(('mongodb://', 'mongodb+srv://')):
-    raise ValueError("MONGODB_URI is invalid or not set in Render Environment Settings.")
+# If the URI is missing, we stop here and show a clear error in Render Logs
+if not uri:
+    print("CRITICAL ERROR: No MongoDB URI found. Check Render Environment Settings.")
+    raise ValueError("MONGODB_URI is missing. Please add it to Render -> Settings -> Environment.")
 
-# Added serverSelectionTimeoutMS to prevent long-running 'DB Error' hangs
-client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-db = client['student_surveillance']
-students_collection = db['students']
-detections_collection = db['detections']
-
-# This threshold is used if you choose to use the MongoDB aggregation method
-DISTANCE_THRESHOLD = 14
+try:
+    # serverSelectionTimeoutMS=10000 gives the database 10 seconds to connect
+    # tlsAllowInvalidCertificates=True helps if there are SSL/Certificate issues on Render
+    client = MongoClient(uri, serverSelectionTimeoutMS=10000, tlsAllowInvalidCertificates=True)
+    
+    # Change 'student_surveillance' to your actual Database name if it's different in Atlas
+    db = client['student_surveillance']
+    students_collection = db['students']
+    detections_collection = db['detections']
+    
+    # Quick Test: Verify connection immediately
+    client.admin.command('ping')
+    print("MongoDB Connected Successfully!")
+except Exception as e:
+    print(f"MongoDB Connection Failed: {str(e)}")
+    raise
 
 def deleteStudent(student_id):
     """Removes a student record by their unique ID."""
@@ -32,7 +43,7 @@ def getStudentDetails(student_id):
     )
 
 def getSuspectsDetails(suspect_ids):
-    """Fetches details for multiple students at once to minimize DB calls."""
+    """Fetches details for multiple students at once."""
     return list(students_collection.find(
         {'studentId': {"$in": suspect_ids}},
         {'name': 1, 'studentId': 1, 'branch': 1, 'photoUrl': 1, '_id': 0}
